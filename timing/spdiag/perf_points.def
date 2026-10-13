@@ -1,0 +1,7 @@
+// X-Macro performance points. The order is part of bridge ABI version 1.
+PERF_KEY_DEF(RPC_CREATE_SANDBOX, "ClientRPC", "CreateSandbox")
+PERF_KEY_DEF(RPC_RUN_STEP,       "ClientRPC", "RunStep")
+PERF_KEY_DEF(RPC_PAUSE_SANDBOX,  "ClientRPC", "PauseSandbox")
+PERF_KEY_DEF(RPC_RESUME_SANDBOX, "ClientRPC", "ResumeSandbox")
+PERF_KEY_DEF(RPC_DELETE_SANDBOX, "ClientRPC", "DeleteSandbox")
+PERF_KEY_DEF(RPC_GET_STATUS,     "ClientRPC", "GetStatus")

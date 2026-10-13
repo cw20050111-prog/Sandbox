@@ -1,0 +1,251 @@
+syntax = "proto3";
+
+package benchmark.agent.v1;
+option cc_generic_services = true;
+
+// Contract v1.0. All required-field and state checks are application checks.
+// request_id is a correlation key, not an exactly-once execution guarantee.
+
+enum Phase {
+  PHASE_UNSPECIFIED = 0;
+  PHASE_CREATE = 1;
+  PHASE_INITIALIZE = 2;
+  PHASE_REPLAY = 3;
+  PHASE_WAIT = 4;
+  PHASE_VALIDATE = 5;
+  PHASE_CLEANUP = 6;
+  PHASE_RECONCILE = 7;
+}
+
+enum SandboxState {
+  SANDBOX_STATE_UNSPECIFIED = 0;
+  SANDBOX_CREATING = 1;
+  SANDBOX_READY = 2;
+  SANDBOX_PAUSING = 3;
+  SANDBOX_PAUSED = 4;
+  SANDBOX_RESUMING = 5;
+  SANDBOX_DELETING = 6;
+  SANDBOX_DELETED = 7;
+  SANDBOX_UNKNOWN = 8;
+}
+
+enum OperationKind {
+  OPERATION_KIND_UNSPECIFIED = 0;
+  OPERATION_CREATE = 1;
+  OPERATION_RUN_STEP = 2;
+  OPERATION_PAUSE = 3;
+  OPERATION_RESUME = 4;
+  OPERATION_DELETE = 5;
+}
+
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  OPERATION_ACCEPTED = 1;
+  OPERATION_RUNNING = 2;
+  OPERATION_SUCCEEDED = 3;
+  OPERATION_FAILED = 4;
+  OPERATION_UNKNOWN = 5;
+}
+
+enum DispatchState {
+  DISPATCH_STATE_UNSPECIFIED = 0;
+  DISPATCH_NOT_STARTED = 1;
+  DISPATCH_MAY_HAVE_STARTED = 2;
+  DISPATCH_STARTED = 3;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_OK = 1;
+  ERROR_INVALID_ARGUMENT = 2;
+  ERROR_NOT_FOUND = 3;
+  ERROR_UNSUPPORTED_BACKEND = 4;
+  ERROR_UNSUPPORTED_TOOL = 5;
+  ERROR_UNSUPPORTED_CAPABILITY = 6;
+  ERROR_INVALID_STATE = 7;
+  ERROR_DUPLICATE_REQUEST = 8;
+  ERROR_REQUEST_ID_CONFLICT = 9;
+  ERROR_TOOL_TIMEOUT = 10;
+  ERROR_OPERATION_TIMEOUT = 11;
+  ERROR_BACKEND_ERROR = 12;
+  ERROR_STATUS_UNAVAILABLE = 13;
+  ERROR_STORAGE_UNAVAILABLE = 14;
+  ERROR_INTERNAL = 15;
+}
+
+message RequestMeta {
+  string request_id = 1;          // Unique per mutation or read request.
+  string run_id = 2;              // One benchmark run.
+  string task_instance_id = 3;    // One replay; distinct for each repetition.
+  string task_id = 4;             // Source dataset task identifier.
+  string round_id = 5;            // Original string identifier, if available.
+  string call_id = 6;             // Original string identifier, if available.
+  Phase phase = 7;
+  string trace_id = 8;            // Optional observability identifier.
+}
+
+// Absence means unmeasured; value_ms = 0 is a valid measured duration.
+message MeasuredDuration {
+  uint64 value_ms = 1;
+}
+
+message ResponseMeta {
+  string request_id = 1;          // ID of THIS RPC, including GetStatus.
+  string trace_id = 2;
+  MeasuredDuration proxy_elapsed = 3;
+}
+
+message ErrorDetail {
+  ErrorCode code = 1;             // Explicit ERROR_OK on success.
+  string message = 2;
+  string backend_code = 3;        // Original backend error code, if available.
+}
+
+message SandboxSpec {
+  uint32 cpu_count = 1;           // Positive integer vCPU count.
+  uint64 memory_mib = 2;          // Positive integer MiB, not decimal MB.
+}
+
+message SandboxInfo {
+  string sandbox_id = 1;          // Proxy identity, stable across pause/resume.
+  string backend = 2;             // Resolved backend; binding is immutable.
+  string template = 3;            // Resolved template/version identifier.
+  SandboxSpec effective_spec = 4;
+  uint32 effective_ttl_seconds = 5;
+  SandboxState state = 6;
+  repeated string capabilities = 7;
+  uint64 observed_at_unix_ms = 8; // Observation time, not a latency metric.
+}
+
+message OperationInfo {
+  string request_id = 1;          // Original mutation request_id.
+  OperationKind kind = 2;
+  OperationState state = 3;
+  DispatchState dispatch_state = 4;
+  string sandbox_id = 5;          // May be empty before create returns an ID.
+  uint64 observed_at_unix_ms = 6;
+  string target_create_request_id = 7; // Delete of an unresolved create.
+}
+
+message CreateSandboxRequest {
+  string template = 1;
+  string backend = 2;             // Explicit configured backend, e.g. e2b.
+  SandboxSpec spec = 3;
+  uint32 ttl_seconds = 4;
+  RequestMeta meta = 5;
+  uint32 timeout_ms = 6;          // Proxy operation timeout; positive.
+}
+
+message CreateSandboxResponse {
+  bool success = 1;               // True only after READY is verified.
+  SandboxInfo sandbox = 2;
+  OperationInfo operation = 3;
+  ErrorDetail error = 4;
+  ResponseMeta meta = 5;
+}
+
+message RunStepRequest {
+  string sandbox_id = 1;
+  uint64 step_id = 2;             // Starts at 1 within task_instance_id.
+  string tool = 3;
+  string arguments_json = 4;      // A validated JSON object.
+  uint32 timeout_ms = 5;          // Tool timeout, not transport timeout.
+  RequestMeta meta = 6;
+}
+
+message RunStepResponse {
+  uint64 step_id = 1;
+  bool success = 2;               // Valid tool return, not task validation.
+  string result_json = 3;         // Normalized tool result; nullable values.
+  string error_message = 4;       // Same text as error.message.
+  OperationInfo operation = 5;
+  ErrorDetail error = 6;
+  ResponseMeta meta = 7;
+}
+
+message PauseSandboxRequest {
+  string sandbox_id = 1;
+  RequestMeta meta = 2;
+  uint32 timeout_ms = 3;
+}
+
+message PauseSandboxResponse {
+  bool success = 1;               // True only after PAUSED is verified.
+  SandboxInfo sandbox = 2;
+  OperationInfo operation = 3;
+  ErrorDetail error = 4;
+  ResponseMeta meta = 5;
+}
+
+message ResumeSandboxRequest {
+  string sandbox_id = 1;
+  RequestMeta meta = 2;
+  uint32 timeout_ms = 3;
+}
+
+message ResumeSandboxResponse {
+  bool success = 1;               // True only after READY is verified.
+  SandboxInfo sandbox = 2;
+  OperationInfo operation = 3;
+  ErrorDetail error = 4;
+  ResponseMeta meta = 5;
+}
+
+message DeleteSandboxRequest {
+  oneof target {
+    string sandbox_id = 1;
+    string create_request_id = 2; // Cleanup when create returned no ID.
+  }
+  RequestMeta meta = 3;
+  uint32 timeout_ms = 4;
+}
+
+message DeleteSandboxResponse {
+  bool success = 1;
+  string sandbox_id = 2;          // Empty if create never produced a sandbox.
+  bool cleanup_confirmed = 3;    // No remaining or late-created resource.
+  OperationInfo operation = 4;
+  ErrorDetail error = 5;
+  ResponseMeta meta = 6;
+}
+
+message OperationRecord {
+  OperationInfo info = 1;
+  // Exactly one stored original response for SUCCEEDED or FAILED.
+  // Omit final_response for ACCEPTED, RUNNING, UNKNOWN.
+  oneof final_response {
+    CreateSandboxResponse create_result = 2;
+    RunStepResponse step_result = 3;
+    PauseSandboxResponse pause_result = 4;
+    ResumeSandboxResponse resume_result = 5;
+    DeleteSandboxResponse delete_result = 6;
+  }
+  RequestMeta original_meta = 7;
+}
+
+message GetStatusRequest {
+  oneof target {
+    string sandbox_id = 1;
+    string operation_request_id = 2; // Original mutation ID, never query ID.
+  }
+  RequestMeta meta = 3;           // A new ID for this read-only RPC.
+}
+
+message GetStatusResponse {
+  bool success = 1;               // Read succeeded; target may be UNKNOWN.
+  oneof result {
+    SandboxInfo sandbox = 2;
+    OperationRecord operation = 3;
+  }
+  ErrorDetail error = 4;
+  ResponseMeta meta = 5;
+}
+
+service AgentProxyService {
+  rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+  rpc RunStep(RunStepRequest) returns (RunStepResponse);
+  rpc PauseSandbox(PauseSandboxRequest) returns (PauseSandboxResponse);
+  rpc ResumeSandbox(ResumeSandboxRequest) returns (ResumeSandboxResponse);
+  rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
